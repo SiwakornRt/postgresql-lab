@@ -1,0 +1,179 @@
+import flask
+from flask import request
+
+import models
+import forms
+
+
+app = flask.Flask(__name__)
+app.config["SECRET_KEY"] = "This is secret key"
+app.config[
+    "SQLALCHEMY_DATABASE_URI"
+] = "postgresql://coe:CoEpasswd@localhost:5432/coedb"
+
+models.init_app(app)
+
+
+@app.route("/")
+def index():
+    db = models.db
+    notes = db.session.execute(
+        db.select(models.Note).order_by(models.Note.title)
+    ).scalars()
+    return flask.render_template(
+        "index.html",
+        notes=notes,
+    )
+
+
+@app.route("/notes/create", methods=["GET", "POST"])
+def notes_create():
+    form = forms.NoteForm()
+    if not form.validate_on_submit():
+        print("error", form.errors)
+        return flask.render_template(
+            "notes-create.html",
+            form=form,
+        )
+    note = models.Note()
+    form.populate_obj(note)
+    note.tags = []
+
+    db = models.db
+    for tag_name in form.tags.data:
+        tag = (
+            db.session.execute(db.select(models.Tag).where(models.Tag.name == tag_name))
+            .scalars()
+            .first()
+        )
+
+        if not tag:
+            tag = models.Tag(name=tag_name)
+            db.session.add(tag)
+
+        note.tags.append(tag)
+
+    db.session.add(note)
+    db.session.commit()
+
+    return flask.redirect(flask.url_for("index"))
+
+
+@app.route("/notes/edit", methods=["GET", "POST"])
+def notes_edit():
+    note_id = request.args.get("note_id")
+    note = models.Note.query.get(note_id)
+    form = forms.NoteForm(obj=note)
+    
+    if not form.validate_on_submit():
+        print("error", form.errors)
+        return flask.render_template(
+            "notes-create.html",
+            form=form,
+        )
+    
+    note.title = form.title.data
+    note.description = form.description.data
+    note.tags = []
+
+    db = models.db
+    for tag_name in form.tags.data:
+        tag = (
+            db.session.execute(db.select(models.Tag).where(models.Tag.name == tag_name))
+            .scalars()
+            .first()
+        )
+
+        if not tag:
+            tag = models.Tag(name=tag_name)
+            db.session.add(tag)
+
+        note.tags.append(tag)
+
+    db.session.add(note)
+    db.session.commit()
+
+    return flask.redirect(flask.url_for("index"))
+
+
+@app.route("/notes/delete", methods=["GET", "POST"])
+def notes_delete():
+    note_id = request.args.get("note_id")
+    note = models.Note.query.get(note_id)
+
+    if note is None:
+        return flask.redirect(flask.url_for("index"))
+
+    db = models.db
+    db.session.delete(note)
+    db.session.commit()
+
+    return flask.redirect(flask.url_for("index"))
+
+
+@app.route("/tags/<tag_name>")
+def tags_view(tag_name):
+    db = models.db
+    tag = (
+        db.session.execute(db.select(models.Tag).where(models.Tag.name == tag_name))
+        .scalars()
+        .first()
+    )
+    notes = db.session.execute(
+        db.select(models.Note).where(models.Note.tags.any(id=tag.id))
+    ).scalars()
+
+    return flask.render_template(
+        "tags-view.html",
+        tag_name=tag_name,
+        notes=notes,
+    )
+
+
+@app.route("/tags/edit", methods=["GET", "POST"])
+def tags_edit():
+    old_tag_name = request.args.get("old_tag_name")  # รับชื่อแท็กเดิมจาก query string
+    new_tag_name = request.form.get("new_tag_name")  # รับชื่อแท็กใหม่จากฟอร์ม
+
+    if not old_tag_name or not new_tag_name:
+        return flask.redirect(flask.url_for("index"))
+
+    db = models.db
+    tag = (
+        db.session.execute(db.select(models.Tag).where(models.Tag.name == old_tag_name))
+        .scalars()
+        .first()
+    )
+
+    if tag:
+        # อัพเดตชื่อแท็ก
+        tag.name = new_tag_name
+        db.session.commit()
+
+    return flask.redirect(flask.url_for("index"))
+
+
+@app.route("/tags/delete")
+def tags_delete():
+    tag_name = request.args.get("tag_name")
+    note_id = request.args.get("note_id")
+    note = models.Note.query.get(note_id)
+
+    db = models.db
+    tag = (
+        db.session.execute(db.select(models.Tag).where(models.Tag.name == tag_name))
+        .scalars()
+        .first()
+    )
+
+    if note and tag:
+        if tag in note.tags:
+            note.tags.remove(tag)
+
+    db.session.commit()
+
+    return flask.redirect(flask.url_for("index"))
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
